@@ -5,6 +5,7 @@ import (
 	pb "github.com/jijiechen/grpc-probe-app/proto"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -13,8 +14,10 @@ type server struct {
 	pb.UnimplementedGreeterServer
 	healthpb.UnimplementedHealthServer
 
-	status healthpb.HealthCheckResponse_ServingStatus
-	c      <-chan struct{}
+	status        healthpb.HealthCheckResponse_ServingStatus
+	streamCounter int
+	watchers      map[int]chan struct{}
+	lock          sync.Mutex
 }
 
 // SayHello implements helloworld.GreeterServer
@@ -34,19 +37,59 @@ func (s *server) Watch(req *healthpb.HealthCheckRequest, server healthpb.Health_
 		return err
 	}
 
+	sId := s.newStream()
+
 	for {
 		select {
-		case <-s.c:
+		case <-s.watchers[sId]:
 			if err := server.SendMsg(s.getStatusResp()); err != nil {
 				return err
 			}
+		case <-server.Context().Done():
+			s.destroyStream(sId)
+			return nil
+		}
+	}
+}
+
+func (s *server) getStatusResp() *healthpb.HealthCheckResponse {
+	return &healthpb.HealthCheckResponse{
+		Status: s.status,
+	}
+}
+
+func (s *server) newStream() int {
+	defer s.lock.Unlock()
+	s.lock.Lock()
+	s.streamCounter++
+
+	if s.watchers == nil {
+		s.watchers = make(map[int]chan struct{})
+	}
+	s.watchers[s.streamCounter] = make(chan struct{})
+
+	return s.streamCounter
+}
+
+func (s *server) destroyStream(sid int) {
+	defer s.lock.Unlock()
+	s.lock.Lock()
+
+	delete(s.watchers, sid)
+}
+
+func (s *server) notifyWatchers() {
+	defer s.lock.Unlock()
+	s.lock.Lock()
+	for _, ch := range s.watchers {
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}
 }
 
 func (s *server) startStatusTicker() {
-	tickerChannel := make(chan struct{})
-	s.c = tickerChannel
 	s.status = healthpb.HealthCheckResponse_NOT_SERVING
 
 	ticker := time.NewTicker(15 * time.Second)
@@ -62,16 +105,7 @@ func (s *server) startStatusTicker() {
 			}
 
 			// don't block the ticker...
-			select {
-			case tickerChannel <- struct{}{}:
-			default:
-			}
+			go s.notifyWatchers()
 		}
-	}
-}
-
-func (s *server) getStatusResp() *healthpb.HealthCheckResponse {
-	return &healthpb.HealthCheckResponse{
-		Status: s.status,
 	}
 }
