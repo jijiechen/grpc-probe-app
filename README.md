@@ -3,6 +3,14 @@ An example application demonstrating how to use gRPC health checking.
 
 # Usage
 
+You may use this app directly using docker:
+
+```
+docker run --rm -it jijiechen/grpc-probe-app:latest
+```
+
+Or if you'd like to build yourself, please clone the code and execute the following commands:
+
 ```sh
  go build -o grpc-probe-app .
  ./grpc-probe-app [--port 5085]
@@ -41,3 +49,9 @@ grpcurl -proto ./proto/healthcheck.proto -d '{"service": "liveness"}' -plaintext
 https://github.com/grpc/grpc/blob/master/doc/health-checking.md
 
 It can be used as a Kubernetes gRPC readiness/liveness/startup probe handler.
+
+# TroubleShooting
+
+Q: Readiness probe errored: missing probe handler for pod(uid):container
+
+A: Please make sure your Kubernetes cluster support the gRPC container probe feature. The feature is available in Kubernetes 1.23+, and requires the `GRPCContainerProbe` feature gate to be turned on a Kubernetes cluster older than 1.27.
